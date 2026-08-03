@@ -46,8 +46,13 @@
     };
   }
 
-  window.EvisaCloudReady = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm').then(function (m) {
-    var supabase = m.createClient(config.url, config.anonKey);
+  window.EvisaCloudReady = (window.EvisaSupabaseReady || import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm').then(function (m) {
+    return m.createClient(config.url, config.anonKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
+  })).then(function (supabase) {
+    if (!supabase) throw new Error('No Supabase client');
+    window.EvisaSupabase = supabase;
     window.EvisaUseCloud = true;
 
     window.getEvisaAdminRecordsAsync = function () {

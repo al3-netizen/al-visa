@@ -50,6 +50,7 @@
   </div>
 
   <script src="evisa-supabase-config.js"></script>
+  <script src="evisa-supabase-client.js"></script>
   <script src="admin-config.js"></script>
   <script>
     (function () {
@@ -63,7 +64,10 @@
         return;
       }
 
-      if (!hasSupabaseConfig) {
+      var adminCfg = window.EVISA_ADMIN_CONFIG || {};
+      if (hasSupabaseConfig) {
+        document.getElementById('adm-user').placeholder = adminCfg.adminEmail || 'Enter admin email';
+      } else {
         document.getElementById('adm-user-label').textContent = 'Username';
       }
 
@@ -81,8 +85,7 @@
         if (hasSupabaseConfig) {
           var btn = form.querySelector('button[type="submit"]');
           if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
-          import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm').then(function (m) {
-            var supabase = m.createClient(supabaseConfig.url, supabaseConfig.anonKey);
+          (window.EvisaSupabaseReady || Promise.reject(new Error('Supabase not configured'))).then(function (supabase) {
             return supabase.auth.signInWithPassword({ email: u, password: p });
           }).then(function (res) {
             if (res.error) {

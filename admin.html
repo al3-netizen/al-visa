@@ -110,6 +110,7 @@
   </div>
 
   <script src="evisa-supabase-config.js"></script>
+  <script src="evisa-supabase-client.js"></script>
   <script src="evisa-admin-data.js"></script>
   <script src="evisa-cloud.js"></script>
   <script>
@@ -117,6 +118,18 @@
       if (sessionStorage.getItem('evisaAdminLogged') !== '1') {
         window.location.href = 'admin-login.html';
         return;
+      }
+      var hasSupabase = !!(window.EvisaSupabaseConfig && window.EvisaSupabaseConfig.url);
+      if (hasSupabase) {
+        (window.EvisaSupabaseReady || Promise.resolve(null)).then(function (supabase) {
+          if (!supabase) return;
+          return supabase.auth.getSession().then(function (out) {
+            if (!out.data.session) {
+              sessionStorage.removeItem('evisaAdminLogged');
+              window.location.href = 'admin-login.html';
+            }
+          });
+        });
       }
       var useCloud = false;
       var editingIndex = null;
@@ -307,6 +320,9 @@
       });
       document.getElementById('admin-exit').addEventListener('click', function () {
         sessionStorage.removeItem('evisaAdminLogged');
+        if (window.EvisaSupabase) {
+          window.EvisaSupabase.auth.signOut();
+        }
       });
       (window.EvisaCloudReady || Promise.resolve(false)).then(function () {
         useCloud = !!window.getEvisaAdminRecordsAsync;
