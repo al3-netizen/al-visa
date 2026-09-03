@@ -72,6 +72,14 @@
         setBusy(false);
       }
 
+      function adminErrorMessage(error) {
+        var message = (error && error.message) || '';
+        if ((error && error.code === 'PGRST202') || /schema cache|is_evisa_admin/i.test(message)) {
+          return 'Admin database setup is incomplete. Please run the Supabase migration and try again.';
+        }
+        return message || 'Invalid email or password.';
+      }
+
       (window.EvisaCloudReady || Promise.resolve(false)).then(function (ready) {
         if (!ready || !window.EvisaSupabase || !window.isEvisaAdminAsync) return false;
         return window.EvisaSupabase.auth.getUser().then(function (result) {
@@ -109,7 +117,7 @@
           }
           window.location.replace('admin.html');
         }).catch(function (error) {
-          showError(error.message || 'Invalid email or password.');
+          showError(adminErrorMessage(error));
         });
       });
     })();
