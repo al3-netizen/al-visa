@@ -72,7 +72,7 @@ test('tracking lookup calls the exact-match RPC and maps its result', async () =
 
 test('schema denies anonymous table reads and authorizes admin writes', () => {
   const schema = read('supabase-schema.sql');
-  assert.match(schema, /revoke all on table public\.evisa_records from anon/i);
+  assert.match(schema, /revoke all on table public\.evisa_records from public, anon/i);
   assert.doesNotMatch(schema, /grant select on public\.evisa_records to anon/i);
   assert.match(schema, /with check \(\(select public\.is_evisa_admin\(\)\)\)/i);
   assert.match(schema, /set search_path = ''/i);
