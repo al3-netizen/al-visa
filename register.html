@@ -115,6 +115,7 @@
             </section>
 
             <section>
+              <div id="register-error" class="hidden mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert"></div>
               <div class="flex items-start gap-3 mb-6">
                 <input id="consent" type="checkbox" required="required"
                        class="mt-1 h-4 w-4 shrink-0 text-secondary-600 focus:ring-secondary-500 border-gray-400 rounded">
@@ -122,7 +123,7 @@
                   I allow the website to collect and store the data I submit through this form.
                 </label>
               </div>
-              <button type="submit"
+              <button type="submit" id="register-submit"
                       class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-secondary-500 hover:bg-secondary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary-500">
                 Register
               </button>
@@ -168,32 +169,69 @@
     </section>
   </footer>
 
+  <script src="evisa-supabase-config.js"></script>
+  <script src="evisa-supabase-client.js"></script>
   <script src="i18n.js"></script>
   <script src="auth-nav.js"></script>
   <script>
-    document.getElementById('register-form').addEventListener('submit', function (e) {
-      e.preventDefault();
-      var p = document.getElementById('password').value;
-      var c = document.getElementById('password-confirmation').value;
-      if (p !== c) {
-        alert('Passwords do not match.');
-        return;
+    (function () {
+      var form = document.getElementById('register-form');
+      var submit = document.getElementById('register-submit');
+      var errorBox = document.getElementById('register-error');
+
+      function setBusy(busy) {
+        submit.disabled = busy;
+        submit.textContent = busy ? 'Creating account…' : 'Register';
       }
-      var fn = document.getElementById('first-name').value.trim();
-      var ln = document.getElementById('last-name').value.trim();
-      var email = document.getElementById('email').value.trim();
-      var displayName = (fn + ' ' + ln).trim() || email.split('@')[0];
-      sessionStorage.setItem('evisaPendingLogin', JSON.stringify({
-        email: email,
-        password: p,
-        displayName: displayName,
-        firstName: fn,
-        lastName: ln,
-        middleName: document.getElementById('middle-name').value.trim(),
-        nationality: document.getElementById('nationality').value
-      }));
-      window.location.href = 'login.html?registered=1';
-    });
+
+      function showError(error) {
+        errorBox.textContent = (error && error.message) || 'Account creation failed. Please try again.';
+        errorBox.classList.remove('hidden');
+        setBusy(false);
+      }
+
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        errorBox.classList.add('hidden');
+        var password = document.getElementById('password').value;
+        var confirmation = document.getElementById('password-confirmation').value;
+        if (password !== confirmation) {
+          showError(new Error('Passwords do not match.'));
+          return;
+        }
+
+        var firstName = document.getElementById('first-name').value.trim();
+        var lastName = document.getElementById('last-name').value.trim();
+        var email = document.getElementById('email').value.trim();
+        var metadata = {
+          first_name: firstName,
+          middle_name: document.getElementById('middle-name').value.trim(),
+          last_name: lastName,
+          nationality: document.getElementById('nationality').value,
+          display_name: (firstName + ' ' + lastName).trim() || email.split('@')[0]
+        };
+
+        setBusy(true);
+        (window.EvisaSupabaseReady || Promise.resolve(null)).then(function (supabase) {
+          if (!supabase) throw new Error('The secure registration service is unavailable.');
+          return supabase.auth.signUp({
+            email: email,
+            password: password,
+            options: {
+              data: metadata,
+              emailRedirectTo: new URL('login.html', window.location.href).href
+            }
+          });
+        }).then(function (result) {
+          if (result.error) throw result.error;
+          if (result.data.session) {
+            window.location.replace('index.html');
+          } else {
+            window.location.replace('login.html?registered=confirm');
+          }
+        }).catch(showError);
+      });
+    })();
   </script>
 </body>
 </html>

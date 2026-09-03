@@ -43,7 +43,7 @@
             <input type="text" id="trackingNumber" name="trackingNumber" required placeholder="e.g. ROM-2XXXXXXX3XXXX">
           </div>
           <div class="form-actions">
-            <button type="submit" class="btn btn-primary">Track application</button>
+            <button type="submit" id="track-submit" class="btn btn-primary">Track application</button>
           </div>
         </form>
       </div>
@@ -51,6 +51,10 @@
       <div id="track-not-found" class="card" style="display: none;">
         <h3>Application not found</h3>
         <p>No application corresponds to the code entered. Please verify the application code and try again.</p>
+      </div>
+      <div id="track-error" class="card border-red-200 bg-red-50 text-red-800" style="display: none;" role="alert">
+        <h3>Unable to check the application</h3>
+        <p id="track-error-message">Please try again in a moment.</p>
       </div>
       <div id="track-result" class="card" style="display: none;">
         <h3>Application details</h3>
@@ -127,12 +131,14 @@
   </footer>
 
   <script src="evisa-supabase-config.js"></script>
-  <script src="evisa-admin-data.js"></script>
+  <script src="evisa-supabase-client.js"></script>
   <script src="evisa-cloud.js"></script>
   <script src="script.js"></script>
   <script>
     var trackCurrentPdfUrl = null;
     var trackPdfBlobUrl = null;
+    var trackCurrentApplicationCode = null;
+    var trackPdfPromise = null;
 
     function dataURLToBlob(dataURL) {
       var parts = String(dataURL).split(',');
@@ -163,58 +169,57 @@
       revokeTrackPdfBlob();
     }
 
-    function openPdfView() {
-      if (!trackCurrentPdfUrl) return;
-      revokeTrackPdfBlob();
-      var blob;
-      try {
-        blob = dataURLToBlob(trackCurrentPdfUrl);
-      } catch (e) {
-        alert('Could not open the document.');
-        return;
+    function loadTrackPdf() {
+      if (trackCurrentPdfUrl) return Promise.resolve(trackCurrentPdfUrl);
+      if (trackPdfPromise) return trackPdfPromise;
+      if (!trackCurrentApplicationCode || !window.getEvisaPdfByApplicationCodeAsync) {
+        return Promise.resolve(null);
       }
-      trackPdfBlobUrl = URL.createObjectURL(blob);
-      var iframe = document.getElementById('track-pdf-iframe');
-      var modal = document.getElementById('track-pdf-modal');
-      var openTab = document.getElementById('track-pdf-open-tab');
-      iframe.src = trackPdfBlobUrl;
-      openTab.href = trackPdfBlobUrl;
-      modal.classList.remove('hidden');
+      trackPdfPromise = getEvisaPdfByApplicationCodeAsync(trackCurrentApplicationCode).then(function (url) {
+        if (!url || !/^data:application\/pdf;base64,/i.test(String(url))) {
+          throw new Error('The attached PDF is unavailable.');
+        }
+        trackCurrentPdfUrl = url;
+        return url;
+      }).finally(function () {
+        trackPdfPromise = null;
+      });
+      return trackPdfPromise;
+    }
+
+    function openPdfView() {
+      loadTrackPdf().then(function () {
+        revokeTrackPdfBlob();
+        var blob = dataURLToBlob(trackCurrentPdfUrl);
+        trackPdfBlobUrl = URL.createObjectURL(blob);
+        var iframe = document.getElementById('track-pdf-iframe');
+        var modal = document.getElementById('track-pdf-modal');
+        var openTab = document.getElementById('track-pdf-open-tab');
+        iframe.src = trackPdfBlobUrl;
+        openTab.href = trackPdfBlobUrl;
+        modal.classList.remove('hidden');
+      }).catch(showTrackError);
     }
 
     function printPdf() {
-      if (!trackCurrentPdfUrl) return;
-      var blob;
-      try {
-        blob = dataURLToBlob(trackCurrentPdfUrl);
-      } catch (e) {
-        alert('Could not read PDF.');
+      var pdfWindow = window.open('', '_blank');
+      if (!pdfWindow) {
+        showTrackError(new Error('Please allow pop-ups to print, or use View PDF.'));
         return;
       }
-      var url = URL.createObjectURL(blob);
-      var w = window.open(url);
-      if (!w) {
-        URL.revokeObjectURL(url);
-        alert('Please allow pop-ups to print, or open the PDF with View PDF and print from there.');
-        return;
-      }
-      var t = setInterval(function () {
-        try {
-          if (w.document && w.document.readyState === 'complete') {
-            clearInterval(t);
-            setTimeout(function () {
-              w.focus();
-              w.print();
-              setTimeout(function () {
-                URL.revokeObjectURL(url);
-              }, 60000);
-            }, 800);
-          }
-        } catch (e) {}
-      }, 200);
-      setTimeout(function () {
-        clearInterval(t);
-      }, 15000);
+      loadTrackPdf().then(function () {
+        var blob = dataURLToBlob(trackCurrentPdfUrl);
+        var url = URL.createObjectURL(blob);
+        pdfWindow.location.href = url;
+        setTimeout(function () {
+          pdfWindow.focus();
+          pdfWindow.print();
+          setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+        }, 1200);
+      }).catch(function (error) {
+        pdfWindow.close();
+        showTrackError(error);
+      });
     }
 
     document.getElementById('track-view-pdf').addEventListener('click', function () {
@@ -231,11 +236,15 @@
     function showTrackResult(row) {
       var result = document.getElementById('track-result');
       var notFound = document.getElementById('track-not-found');
+      var errorBox = document.getElementById('track-error');
       var pdfBox = document.getElementById('track-pdf-actions');
       var tbody = document.getElementById('track-result-body');
       result.style.display = 'none';
       notFound.style.display = 'none';
+      errorBox.style.display = 'none';
       trackCurrentPdfUrl = null;
+      trackCurrentApplicationCode = null;
+      trackPdfPromise = null;
       pdfBox.classList.add('hidden');
       if (!row) {
         notFound.style.display = 'block';
@@ -252,23 +261,37 @@
         '<td class="border border-gray-300 px-3 py-2">' + esc(row.visaNumber) + '</td>' +
         '<td class="border border-gray-300 px-3 py-2 font-mono">' + esc(row.applicationCode) + '</td>' +
         '<td class="border border-gray-300 px-3 py-2"><span class="inline-block rounded px-2 py-0.5 text-xs font-semibold ' + bc + '">' + esc(row.status) + '</span></td></tr>';
-      if (row.pdfDataUrl && /data:application\/pdf|base64/i.test(String(row.pdfDataUrl))) {
-        trackCurrentPdfUrl = row.pdfDataUrl;
+      if (row.hasPdf) {
+        trackCurrentApplicationCode = row.applicationCode;
         pdfBox.classList.remove('hidden');
       }
       result.style.display = 'block';
+    }
+
+    function showTrackError(error) {
+      console.error(error);
+      document.getElementById('track-result').style.display = 'none';
+      document.getElementById('track-not-found').style.display = 'none';
+      document.getElementById('track-error-message').textContent =
+        (error && error.message) || 'Please try again in a moment.';
+      document.getElementById('track-error').style.display = 'block';
     }
 
     document.getElementById('track-form').addEventListener('submit', function (e) {
       e.preventDefault();
       var code = document.getElementById('trackingNumber').value.replace(/\s+/g, ' ').trim();
       if (!code) return;
-      (window.EvisaCloudReady || Promise.resolve()).then(function () {
-        if (window.findEvisaByApplicationCodeAsync) {
-          findEvisaByApplicationCodeAsync(code).then(showTrackResult);
-        } else {
-          showTrackResult(findEvisaByApplicationCode(code));
+      var submit = document.getElementById('track-submit');
+      submit.disabled = true;
+      submit.textContent = 'Checking…';
+      (window.EvisaCloudReady || Promise.resolve(false)).then(function (ready) {
+        if (!ready || !window.findEvisaByApplicationCodeAsync) {
+          throw new Error('The secure tracking service is unavailable.');
         }
+        return findEvisaByApplicationCodeAsync(code);
+      }).then(showTrackResult).catch(showTrackError).finally(function () {
+        submit.disabled = false;
+        submit.textContent = 'Track application';
       });
     });
   </script>

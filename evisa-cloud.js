@@ -1,152 +1,150 @@
 /**
- * Cross-device: Supabase DB (evisa_records).
- * Dynamic import use karte hain taake har device par Supabase load ho – data sab jagah dikhe.
+ * Secure Supabase data access for admin, tracking and verification flows.
+ * Public pages use exact-match RPC functions; the records table is never
+ * directly readable by anonymous visitors.
  */
 (function () {
   'use strict';
-  var config = window.EvisaSupabaseConfig;
-  if (!config || !config.url || !config.anonKey) {
-    window.EvisaCloudReady = Promise.resolve(false);
-    return;
-  }
 
+  var config = window.EvisaSupabaseConfig;
   var TABLE = 'evisa_records';
 
-  function norm(s) {
-    return String(s || '').trim();
-  }
-  function normalizeForLookup(s) {
-    return norm(s).toLowerCase().replace(/\s+/g, ' ').replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '').trim();
-  }
-
-  function toRow(r, prev) {
-    var item = {
-      passport_number: norm(r.passportNumber || r.passport_number),
-      visa_number: norm(r.visaNumber || r.visa_number),
-      application_code: norm(r.applicationCode || r.application_code),
-      status: norm(r.status),
-      buffered: r.hasOwnProperty('buffered') ? !!r.buffered : (prev && !!prev.buffered)
-    };
-    if (r.pdfDataUrl !== undefined && r.pdfDataUrl !== null) item.pdf_data_url = r.pdfDataUrl;
-    else if (r.pdf_data_url !== undefined) item.pdf_data_url = r.pdf_data_url;
-    else if (prev && (prev.pdfDataUrl || prev.pdf_data_url)) item.pdf_data_url = prev.pdfDataUrl || prev.pdf_data_url;
-    return item;
+  function norm(value) {
+    return String(value || '').trim();
   }
 
   function fromRow(row) {
     if (!row) return null;
     return {
-      id: row.id,
-      passportNumber: row.passport_number || '',
-      visaNumber: row.visa_number || '',
+      id: row.id || null,
+      passportNumber: row.passport_number || row.masked_passport_number || '',
+      visaNumber: row.visa_number || row.masked_visa_number || '',
       applicationCode: row.application_code || '',
       status: row.status || '',
-      pdfDataUrl: row.pdf_data_url || null,
-      buffered: !!row.buffered
+      hasPdf: !!row.has_pdf,
+      buffered: !!row.buffered,
+      createdAt: row.created_at || null
     };
   }
 
-  window.EvisaCloudReady = (window.EvisaSupabaseReady || import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm').then(function (m) {
-    return m.createClient(config.url, config.anonKey, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
-    });
-  })).then(function (supabase) {
-    if (!supabase) throw new Error('No Supabase client');
+  function toRow(record) {
+    var row = {
+      passport_number: norm(record.passportNumber),
+      visa_number: norm(record.visaNumber),
+      application_code: norm(record.applicationCode),
+      status: norm(record.status),
+      buffered: !!record.buffered
+    };
+    if (record.pdfDataUrl !== undefined) row.pdf_data_url = record.pdfDataUrl || null;
+    return row;
+  }
+
+  function firstRpcRow(result) {
+    if (result.error) throw result.error;
+    if (Array.isArray(result.data)) return fromRow(result.data[0]);
+    return fromRow(result.data);
+  }
+
+  window.statusBadgeClass = function (status) {
+    var value = norm(status).toLowerCase();
+    if (value === 'approved') return 'bg-green-100 text-green-800';
+    if (value === 'pending') return 'bg-yellow-100 text-yellow-800';
+    if (value === 'rejected' || value === 'reject') return 'bg-red-100 text-red-800';
+    if (value.indexOf('review') >= 0) return 'bg-blue-100 text-blue-800';
+    return 'bg-gray-100 text-gray-800';
+  };
+
+  if (!config || !config.url || !config.anonKey) {
+    window.EvisaCloudReady = Promise.resolve(false);
+    return;
+  }
+
+  window.EvisaCloudReady = (window.EvisaSupabaseReady || Promise.resolve(null)).then(function (supabase) {
+    if (!supabase) throw new Error('Supabase client is unavailable.');
     window.EvisaSupabase = supabase;
-    window.EvisaUseCloud = true;
+
+    window.isEvisaAdminAsync = function () {
+      return supabase.rpc('is_evisa_admin').then(function (result) {
+        if (result.error) throw result.error;
+        return result.data === true;
+      });
+    };
 
     window.getEvisaAdminRecordsAsync = function () {
-      return supabase.from(TABLE).select('*').order('created_at', { ascending: true })
-        .then(function (res) {
-          if (res.error) throw res.error;
-          return (res.data || []).map(fromRow);
+      return supabase
+        .from(TABLE)
+        .select('id,passport_number,visa_number,application_code,status,buffered,has_pdf,created_at')
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .then(function (result) {
+          if (result.error) throw result.error;
+          return (result.data || []).map(fromRow);
         });
     };
 
-    window.addEvisaAdminRecordAsync = function (r) {
-      var row = toRow(r, null);
-      return supabase.from(TABLE).insert(row).then(function (res) {
-        if (res.error) throw res.error;
-        return res;
+    window.addEvisaAdminRecordAsync = function (record) {
+      return supabase.from(TABLE).insert(toRow(record)).select('id').single().then(function (result) {
+        if (result.error) throw result.error;
+        return result.data;
       });
     };
 
-    window.updateEvisaAdminRecordAtAsync = function (index, r) {
-      return window.getEvisaAdminRecordsAsync().then(function (rows) {
-        if (index < 0 || index >= rows.length) return;
-        var prev = rows[index];
-        var id = prev.id;
-        if (!id) throw new Error('No id');
-        var row = toRow(r, prev);
-        return supabase.from(TABLE).update(row).eq('id', id).then(function (res) {
-          if (res.error) throw res.error;
-          return res;
-        });
+    window.updateEvisaAdminRecordAsync = function (id, record) {
+      if (!id) return Promise.reject(new Error('Record id is missing.'));
+      return supabase.from(TABLE).update(toRow(record)).eq('id', id).select('id').single().then(function (result) {
+        if (result.error) throw result.error;
+        return result.data;
       });
     };
 
-    window.removeEvisaAdminRecordAtAsync = function (index) {
-      return window.getEvisaAdminRecordsAsync().then(function (rows) {
-        if (index < 0 || index >= rows.length) return;
-        var id = rows[index].id;
-        if (!id) throw new Error('No id');
-        return supabase.from(TABLE).delete().eq('id', id).then(function (res) {
-          if (res.error) throw res.error;
-          return res;
-        });
+    window.removeEvisaAdminRecordAsync = function (id) {
+      if (!id) return Promise.reject(new Error('Record id is missing.'));
+      return supabase.from(TABLE).delete().eq('id', id).select('id').single().then(function (result) {
+        if (result.error) throw result.error;
+        return result.data;
       });
     };
 
-    window.toggleEvisaBufferedAtAsync = function (index) {
-      return window.getEvisaAdminRecordsAsync().then(function (rows) {
-        if (index < 0 || index >= rows.length) return;
-        var prev = rows[index];
-        var id = prev.id;
-        if (!id) throw new Error('No id');
-        var next = {
-          passportNumber: prev.passportNumber,
-          visaNumber: prev.visaNumber,
-          applicationCode: prev.applicationCode,
-          status: prev.status,
-          buffered: !prev.buffered
-        };
-        if (prev.pdfDataUrl) next.pdfDataUrl = prev.pdfDataUrl;
-        var row = toRow(next, prev);
-        return supabase.from(TABLE).update(row).eq('id', id).then(function (res) {
-          if (res.error) throw res.error;
-          return res;
-        });
+    window.toggleEvisaBufferedAsync = function (id, buffered) {
+      if (!id) return Promise.reject(new Error('Record id is missing.'));
+      return supabase.from(TABLE).update({ buffered: !!buffered }).eq('id', id).select('id').single().then(function (result) {
+        if (result.error) throw result.error;
+        return result.data;
       });
     };
 
     window.findEvisaByApplicationCodeAsync = function (code) {
-      var c = normalizeForLookup(code);
-      if (!c) return Promise.resolve(undefined);
-      return supabase.from(TABLE).select('*').eq('buffered', false).then(function (res) {
-        if (res.error) throw res.error;
-        var list = (res.data || []).map(fromRow);
-        return list.find(function (x) {
-          return normalizeForLookup(x.applicationCode) === c;
-        });
-      });
+      var value = norm(code);
+      if (!value) return Promise.resolve(undefined);
+      return supabase.rpc('lookup_evisa_by_application_code', {
+        p_application_code: value
+      }).then(firstRpcRow);
     };
 
     window.findEvisaByPassportVisaAsync = function (passport, visa) {
-      var p = normalizeForLookup(passport);
-      var v = normalizeForLookup(visa);
-      if (!p || !v) return Promise.resolve(undefined);
-      return supabase.from(TABLE).select('*').eq('buffered', false).then(function (res) {
-        if (res.error) throw res.error;
-        var list = (res.data || []).map(fromRow);
-        return list.find(function (x) {
-          return normalizeForLookup(x.passportNumber) === p && normalizeForLookup(x.visaNumber) === v;
-        });
+      var passportValue = norm(passport);
+      var visaValue = norm(visa);
+      if (!passportValue || !visaValue) return Promise.resolve(undefined);
+      return supabase.rpc('lookup_evisa_by_passport_visa', {
+        p_passport_number: passportValue,
+        p_visa_number: visaValue
+      }).then(firstRpcRow);
+    };
+
+    window.getEvisaPdfByApplicationCodeAsync = function (code) {
+      var value = norm(code);
+      if (!value) return Promise.resolve(null);
+      return supabase.rpc('get_evisa_pdf_by_application_code', {
+        p_application_code: value
+      }).then(function (result) {
+        if (result.error) throw result.error;
+        return result.data || null;
       });
     };
 
     return true;
-  }).catch(function (e) {
-    console.warn('Evisa Supabase cloud init failed', e);
+  }).catch(function (error) {
+    console.warn('Evisa Supabase cloud init failed', error);
     return false;
   });
 })();

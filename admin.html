@@ -16,9 +16,12 @@
       }
     };
   </script>
+  <style>
+    body.admin-auth-pending { visibility: hidden; }
+  </style>
   <link rel="stylesheet" href="styles.css">
 </head>
-<body data-i18n-page="admin">
+<body data-i18n-page="admin" class="admin-auth-pending">
   <header class="header" id="navbar">
     <nav>
       <section class="navbar-inner" aria-label="Primary navigation">
@@ -111,35 +114,49 @@
 
   <script src="evisa-supabase-config.js"></script>
   <script src="evisa-supabase-client.js"></script>
-  <script src="evisa-admin-data.js"></script>
   <script src="evisa-cloud.js"></script>
   <script>
     (function () {
-      if (sessionStorage.getItem('evisaAdminLogged') !== '1') {
-        window.location.href = 'admin-login.html';
-        return;
+      function denyAccess() {
+        var client = window.EvisaSupabase;
+        var signOut = client ? client.auth.signOut() : Promise.resolve();
+        signOut.catch(function () {}).finally(function () {
+          window.location.replace('admin-login.html');
+        });
       }
-      var hasSupabase = !!(window.EvisaSupabaseConfig && window.EvisaSupabaseConfig.url);
-      if (hasSupabase) {
-        (window.EvisaSupabaseReady || Promise.resolve(null)).then(function (supabase) {
-          if (!supabase) return;
-          return supabase.auth.getSession().then(function (out) {
-            if (!out.data.session) {
-              sessionStorage.removeItem('evisaAdminLogged');
-              window.location.href = 'admin-login.html';
-            }
+
+      function authorizeAdmin() {
+        return (window.EvisaCloudReady || Promise.resolve(false)).then(function (ready) {
+          if (!ready || !window.EvisaSupabase || !window.isEvisaAdminAsync) return false;
+          return window.EvisaSupabase.auth.getUser().then(function (result) {
+            if (result.error || !result.data.user) return false;
+            return window.isEvisaAdminAsync();
           });
         });
       }
-      var useCloud = false;
+
+      function startAdmin() {
+      document.body.classList.remove('admin-auth-pending');
       var editingIndex = null;
       var formTitle = document.getElementById('admin-form-title');
       var submitBtn = document.getElementById('admin-submit-btn');
       var cancelEditBtn = document.getElementById('admin-cancel-edit');
 
+      function setSaving(saving) {
+        submitBtn.disabled = saving;
+        submitBtn.textContent = saving ? 'Saving…' : (editingIndex === null ? 'Save' : 'Update');
+      }
+
+      function showAdminError(error) {
+        console.error(error);
+        setSaving(false);
+        alert((error && error.message) || 'The operation failed. Please try again.');
+      }
+
       function resetEditMode() {
         editingIndex = null;
         formTitle.textContent = 'Add record';
+        submitBtn.disabled = false;
         submitBtn.textContent = 'Save';
         cancelEditBtn.classList.add('hidden');
         document.getElementById('adm-pdf').value = '';
@@ -150,7 +167,7 @@
       }
 
       function startEdit(index) {
-        var rows = useCloud ? window._adminCachedRows : getEvisaAdminRecords();
+        var rows = window._adminCachedRows || [];
         var r = rows && rows[index];
         if (!r) return;
         editingIndex = index;
@@ -163,7 +180,7 @@
         document.getElementById('adm-status').value = r.status;
         document.getElementById('adm-pdf').value = '';
         document.getElementById('adm-pdf-remove').checked = false;
-        if (r.pdfDataUrl) {
+        if (r.hasPdf) {
           document.getElementById('adm-pdf-hint').classList.remove('hidden');
           document.getElementById('adm-pdf-remove-wrap').classList.remove('hidden');
         } else {
@@ -176,11 +193,8 @@
 
       function renderTable(rows) {
         if (rows === undefined) {
-          if (useCloud) {
-            getEvisaAdminRecordsAsync().then(renderTable);
-            return;
-          }
-          rows = getEvisaAdminRecords();
+          getEvisaAdminRecordsAsync().then(renderTable).catch(showAdminError);
+          return;
         }
         var tb = document.getElementById('admin-table-body');
         var empty = document.getElementById('admin-empty');
@@ -194,7 +208,7 @@
           var tr = document.createElement('tr');
           tr.className = 'bg-white';
           var bc = statusBadgeClass(r.status);
-          var pdfCell = r.pdfDataUrl ? '<span class="text-green-600 font-semibold">Yes</span>' : '—';
+          var pdfCell = r.hasPdf ? '<span class="text-green-600 font-semibold">Yes</span>' : '—';
           var buffered = !!r.buffered;
           var bufferBtnClass = buffered ? 'bg-amber-500 text-white' : 'bg-gray-200 text-gray-700';
           var bufferLabel = buffered ? 'On' : 'Off';
@@ -225,25 +239,22 @@
               else if (editingIndex !== null && editingIndex > idx) editingIndex--;
               renderTable();
             }
-            if (useCloud) removeEvisaAdminRecordAtAsync(idx).then(done);
-            else {
-              removeEvisaAdminRecordAt(idx);
-              done();
-            }
+            var row = window._adminCachedRows && window._adminCachedRows[idx];
+            if (!row) return;
+            removeEvisaAdminRecordAsync(row.id).then(done).catch(showAdminError);
           });
         });
         tb.querySelectorAll('.admin-buffer').forEach(function (btn) {
           btn.addEventListener('click', function () {
             var idx = parseInt(btn.getAttribute('data-index'), 10);
-            if (useCloud) {
-              toggleEvisaBufferedAtAsync(idx).then(function () { renderTable(); });
-            } else {
-              toggleEvisaBufferedAt(idx);
-              renderTable();
-            }
+            var row = window._adminCachedRows && window._adminCachedRows[idx];
+            if (!row) return;
+            toggleEvisaBufferedAsync(row.id, !row.buffered)
+              .then(function () { renderTable(); })
+              .catch(showAdminError);
           });
         });
-        if (useCloud) window._adminCachedRows = rows;
+        window._adminCachedRows = rows;
       }
       function esc(s) {
         var d = document.createElement('div');
@@ -277,37 +288,37 @@
         };
 
         function saveWithPdf(pdfDataUrl) {
+          setSaving(true);
           function done() {
             resetEditMode();
             fileInput.value = '';
             renderTable();
           }
           if (editingIndex !== null) {
+            var current = window._adminCachedRows && window._adminCachedRows[editingIndex];
+            if (!current) {
+              showAdminError(new Error('The selected record no longer exists.'));
+              return;
+            }
             if (removePdf) data.pdfDataUrl = null;
             else if (pdfDataUrl) data.pdfDataUrl = pdfDataUrl;
             else data.pdfDataUrl = undefined;
-            data.buffered = (window._adminCachedRows && window._adminCachedRows[editingIndex] && window._adminCachedRows[editingIndex].buffered) || false;
-            if (useCloud) updateEvisaAdminRecordAtAsync(editingIndex, data).then(done);
-            else { updateEvisaAdminRecordAt(editingIndex, data); done(); }
+            data.buffered = !!current.buffered;
+            updateEvisaAdminRecordAsync(current.id, data).then(done).catch(showAdminError);
           } else {
             data.pdfDataUrl = pdfDataUrl || null;
             data.buffered = false;
-            if (useCloud) addEvisaAdminRecordAsync(data).then(done);
-            else { addEvisaAdminRecord(data); done(); }
+            addEvisaAdminRecordAsync(data).then(done).catch(showAdminError);
           }
         }
 
         if (file) {
           var fr = new FileReader();
           fr.onload = function () {
-            try {
-              saveWithPdf(fr.result);
-            } catch (err) {
-              alert('Could not save the file. Please try a smaller PDF.');
-            }
+            saveWithPdf(fr.result);
           };
           fr.onerror = function () {
-            alert('Could not read the file.');
+            showAdminError(new Error('Could not read the file.'));
           };
           fr.readAsDataURL(file);
         } else {
@@ -318,16 +329,25 @@
       cancelEditBtn.addEventListener('click', function () {
         resetEditMode();
       });
-      document.getElementById('admin-exit').addEventListener('click', function () {
-        sessionStorage.removeItem('evisaAdminLogged');
-        if (window.EvisaSupabase) {
-          window.EvisaSupabase.auth.signOut();
-        }
+      document.getElementById('admin-exit').addEventListener('click', function (event) {
+        event.preventDefault();
+        var signOut = window.EvisaSupabase ? window.EvisaSupabase.auth.signOut() : Promise.resolve();
+        signOut.catch(function () {}).finally(function () {
+          window.location.href = 'index.html';
+        });
       });
-      (window.EvisaCloudReady || Promise.resolve(false)).then(function () {
-        useCloud = !!window.getEvisaAdminRecordsAsync;
-        if (useCloud) document.getElementById('admin-cloud-hint').classList.remove('hidden');
-        renderTable();
+      document.getElementById('admin-cloud-hint').classList.remove('hidden');
+      renderTable();
+      }
+
+      authorizeAdmin().then(function (isAdmin) {
+        if (!isAdmin) {
+          denyAccess();
+          return;
+        }
+        startAdmin();
+      }).catch(function () {
+        denyAccess();
       });
     })();
   </script>

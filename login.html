@@ -42,8 +42,9 @@
         <div class="flex justify-center">
           <article class="rounded-md border border-gray-400 p-12 max-w-lg w-full space-y-8 bg-white">
             <div id="reg-success" class="hidden rounded-md border border-green-200 bg-green-50 px-4 py-3 text-center text-sm text-green-800" role="status">
-              Your account has been created. Please sign in.
+              Check your email to confirm your account, then sign in.
             </div>
+            <div id="login-error" class="hidden rounded-md border border-red-200 bg-red-50 px-4 py-3 text-center text-sm text-red-800" role="alert"></div>
             <header>
               <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">Sign in to your account</h2>
             </header>
@@ -52,7 +53,7 @@
                 <div>
                   <input
                     id="email-address"
-                    type="text"
+                    type="email"
                     placeholder="Email address"
                     name="email"
                     required="required"
@@ -73,23 +74,16 @@
                 </div>
               </section>
 
-              <section class="flex items-center justify-between">
-                <div class="flex items-center">
-                  <input
-                    id="remember_me"
-                    type="checkbox"
-                    class="h-4 w-4 text-secondary-600 focus:ring-secondary-500 border-gray-400 rounded"
-                  />
-                  <label for="remember_me" class="ml-2 block text-sm text-gray-900">Remember me</label>
-                </div>
+              <section class="flex items-center justify-end">
                 <div class="text-sm text-right">
-                  <a href="https://e-visa.al/forgot-password" class="font-medium text-secondary-500 hover:text-secondary-700 cursor-pointer" target="_blank" rel="noopener">Forgot your password?</a>
+                  <button type="button" id="forgot-password" class="font-medium text-secondary-500 hover:text-secondary-700 cursor-pointer">Forgot your password?</button>
                 </div>
               </section>
 
               <section>
                 <button
                   type="submit"
+                  id="login-submit"
                   class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-secondary-500 hover:bg-secondary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary-500"
                 >
                   Sign in
@@ -136,57 +130,66 @@
       </section>
     </section>
   </footer>
+  <script src="evisa-supabase-config.js"></script>
+  <script src="evisa-supabase-client.js"></script>
   <script src="i18n.js"></script>
   <script src="auth-nav.js"></script>
   <script>
     (function () {
-      var pending = null;
-      try {
-        pending = JSON.parse(sessionStorage.getItem('evisaPendingLogin') || 'null');
-      } catch (x) {}
-      if (new URLSearchParams(location.search).get('registered') === '1' && pending && pending.email) {
+      var form = document.getElementById('login-form');
+      var submit = document.getElementById('login-submit');
+      var errorBox = document.getElementById('login-error');
+      var registered = new URLSearchParams(location.search).get('registered');
+      if (registered) {
         document.getElementById('reg-success').classList.remove('hidden');
-        document.getElementById('email-address').value = pending.email;
-        document.getElementById('password').value = pending.password || '';
       }
 
-      document.getElementById('login-form').addEventListener('submit', function (e) {
-        e.preventDefault();
+      function setBusy(busy) {
+        submit.disabled = busy;
+        submit.textContent = busy ? 'Signing in…' : 'Sign in';
+      }
+
+      function showError(error) {
+        errorBox.textContent = (error && error.message) || 'Sign in failed. Please try again.';
+        errorBox.classList.remove('hidden');
+        setBusy(false);
+      }
+
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        errorBox.classList.add('hidden');
         var email = document.getElementById('email-address').value.trim();
-        var pass = document.getElementById('password').value;
-        var pend = null;
-        var acc = null;
-        try {
-          pend = JSON.parse(sessionStorage.getItem('evisaPendingLogin') || 'null');
-        } catch (x) {}
-        try {
-          acc = JSON.parse(sessionStorage.getItem('evisaAccount') || 'null');
-        } catch (x) {}
-        if (pend && pend.email === email && pend.password === pass) {
-          var acct = {
-            email: email,
-            password: pass,
-            displayName: pend.displayName || email,
-            firstName: pend.firstName || '',
-            lastName: pend.lastName || '',
-            middleName: pend.middleName || '',
-            nationality: pend.nationality || 'IN'
-          };
-          sessionStorage.setItem('evisaUser', JSON.stringify({ email: email, displayName: acct.displayName }));
-          sessionStorage.setItem('evisaAccount', JSON.stringify(acct));
-          sessionStorage.removeItem('evisaPendingLogin');
-          window.location.href = 'index.html';
+        var password = document.getElementById('password').value;
+        setBusy(true);
+        (window.EvisaSupabaseReady || Promise.resolve(null)).then(function (supabase) {
+          if (!supabase) throw new Error('The secure login service is unavailable.');
+          return supabase.auth.signInWithPassword({ email: email, password: password });
+        }).then(function (result) {
+          if (result.error) throw result.error;
+          window.location.replace('index.html');
+        }).catch(showError);
+      });
+
+      document.getElementById('forgot-password').addEventListener('click', function () {
+        var email = document.getElementById('email-address').value.trim();
+        if (!email) {
+          showError(new Error('Enter your email address first.'));
           return;
         }
-        if (acc && acc.email === email && acc.password === pass) {
-          sessionStorage.setItem('evisaUser', JSON.stringify({ email: email, displayName: acc.displayName || email }));
-          window.location.href = 'index.html';
-          return;
-        }
-        alert('Invalid email or password.');
+        errorBox.classList.add('hidden');
+        (window.EvisaSupabaseReady || Promise.resolve(null)).then(function (supabase) {
+          if (!supabase) throw new Error('The password recovery service is unavailable.');
+          return supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: new URL('reset-password.html', window.location.href).href
+          });
+        }).then(function (result) {
+          if (result.error) throw result.error;
+          document.getElementById('reg-success').textContent =
+            'Password reset instructions have been sent to your email.';
+          document.getElementById('reg-success').classList.remove('hidden');
+        }).catch(showError);
       });
     })();
   </script>
 </body>
 </html>
-

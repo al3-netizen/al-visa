@@ -9,7 +9,7 @@
     return;
   }
 
-  window.EvisaSupabaseReady = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm').then(function (m) {
+  window.EvisaSupabaseReady = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.114.0/+esm').then(function (m) {
     if (!window.EvisaSupabase) {
       window.EvisaSupabase = m.createClient(config.url, config.anonKey, {
         auth: {
