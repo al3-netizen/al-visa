@@ -67,7 +67,7 @@ drop policy if exists "evisa_admin_insert" on public.evisa_records;
 drop policy if exists "evisa_admin_update" on public.evisa_records;
 drop policy if exists "evisa_admin_delete" on public.evisa_records;
 
-revoke all on table public.evisa_records from anon;
+revoke all on table public.evisa_records from public, anon;
 grant select, insert, update, delete on table public.evisa_records to authenticated;
 
 create policy "evisa_admin_select"
