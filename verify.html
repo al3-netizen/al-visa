@@ -46,11 +46,14 @@
               <input id="passport-number" type="text" name="passport-number" required placeholder="Passport Number"
                      class="appearance-none relative block border rounded-md border-gray-400 px-3 py-2 w-full placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-secondary-500 focus:border-secondary-500 focus:z-10 sm:text-sm">
             </div>
-            <button type="submit" class="w-full button button-secondary mt-4">Verify</button>
+            <button type="submit" id="verify-submit" class="w-full button button-secondary mt-4">Verify</button>
           </form>
 
           <div id="verify-not-found" class="hidden w-full mt-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-center text-sm text-red-800">
             <p class="m-0">No application was found for the passport and visa number entered.</p>
+          </div>
+          <div id="verify-error" class="hidden w-full mt-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-center text-sm text-red-800" role="alert">
+            <p id="verify-error-message" class="m-0">The verification service is unavailable. Please try again.</p>
           </div>
 
           <div id="verify-result" class="hidden w-full mt-8 overflow-x-auto" aria-live="polite">
@@ -109,7 +112,7 @@
   </footer>
 
   <script src="evisa-supabase-config.js"></script>
-  <script src="evisa-admin-data.js"></script>
+  <script src="evisa-supabase-client.js"></script>
   <script src="evisa-cloud.js"></script>
   <script src="script.js"></script>
   <script>
@@ -117,11 +120,13 @@
       var form = document.getElementById('verify-form');
       var resultWrap = document.getElementById('verify-result');
       var notFound = document.getElementById('verify-not-found');
+      var errorWrap = document.getElementById('verify-error');
       var tbody = document.getElementById('verify-result-body');
 
       function showVerifyResult(row) {
         resultWrap.classList.add('hidden');
         notFound.classList.add('hidden');
+        errorWrap.classList.add('hidden');
         if (!row) {
           notFound.classList.remove('hidden');
           notFound.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -140,17 +145,31 @@
         resultWrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
 
+      function showVerifyError(error) {
+        console.error(error);
+        resultWrap.classList.add('hidden');
+        notFound.classList.add('hidden');
+        document.getElementById('verify-error-message').textContent =
+          (error && error.message) || 'The verification service is unavailable. Please try again.';
+        errorWrap.classList.remove('hidden');
+      }
+
       form.addEventListener('submit', function (e) {
         e.preventDefault();
         var visa = document.getElementById('serial-number').value.replace(/\s+/g, ' ').trim();
         var passport = document.getElementById('passport-number').value.replace(/\s+/g, ' ').trim();
         if (!visa || !passport) return;
-        (window.EvisaCloudReady || Promise.resolve()).then(function () {
-          if (window.findEvisaByPassportVisaAsync) {
-            findEvisaByPassportVisaAsync(passport, visa).then(showVerifyResult);
-          } else {
-            showVerifyResult(findEvisaByPassportVisa(passport, visa));
+        var submit = document.getElementById('verify-submit');
+        submit.disabled = true;
+        submit.textContent = 'Checking…';
+        (window.EvisaCloudReady || Promise.resolve(false)).then(function (ready) {
+          if (!ready || !window.findEvisaByPassportVisaAsync) {
+            throw new Error('The secure verification service is unavailable.');
           }
+          return findEvisaByPassportVisaAsync(passport, visa);
+        }).then(showVerifyResult).catch(showVerifyError).finally(function () {
+          submit.disabled = false;
+          submit.textContent = 'Verify';
         });
       });
 

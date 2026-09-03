@@ -16,9 +16,10 @@
       }
     };
   </script>
+  <style>body.profile-auth-pending { visibility: hidden; }</style>
   <link rel="stylesheet" href="styles.css">
 </head>
-<body data-i18n-page="profile">
+<body data-i18n-page="profile" class="profile-auth-pending">
   <header class="header" id="navbar">
     <nav>
       <section class="navbar-inner" aria-label="Primary navigation">
@@ -41,6 +42,7 @@
       <section class="max-w-screen-xl mx-auto sm:px-6 lg:px-8 px-4 py-32">
         <article class="border border-gray-400 rounded-md p-2 sm:p-4 md:p-8 bg-white w-full">
           <form id="profile-form" class="mt-8 space-y-6" action="#" method="post">
+            <div id="profile-message" class="hidden rounded-md px-4 py-3 text-sm" role="status"></div>
             <section>
               <header class="mb-4">
                 <h3 class="text-lg font-semibold text-gray-900">Personal Information</h3>
@@ -109,7 +111,7 @@
 
             <section>
               <div class="mt-6">
-                <button type="submit" class="w-full button button-secondary">Save</button>
+                <button type="submit" id="profile-submit" class="w-full button button-secondary">Save</button>
               </div>
             </section>
           </form>
@@ -153,70 +155,97 @@
     </section>
   </footer>
 
+  <script src="evisa-supabase-config.js"></script>
+  <script src="evisa-supabase-client.js"></script>
   <script src="i18n.js"></script>
   <script src="auth-nav.js"></script>
   <script>
     (function () {
       var user = null;
-      var acc = null;
-      try {
-        user = JSON.parse(sessionStorage.getItem('evisaUser') || 'null');
-      } catch (e) {}
-      try {
-        acc = JSON.parse(sessionStorage.getItem('evisaAccount') || 'null');
-      } catch (e) {}
-      if (!user || !user.email) {
-        window.location.href = 'login.html';
-        return;
-      }
-      if (!acc) acc = { email: user.email, password: '', displayName: user.displayName || '' };
+      var submit = document.getElementById('profile-submit');
+      var message = document.getElementById('profile-message');
 
-      function fill() {
-        var fn = acc.firstName || '';
-        var ln = acc.lastName || '';
-        var mn = acc.middleName || '';
-        if (!fn && !ln && acc.displayName) {
-          var p = acc.displayName.trim().split(/\s+/);
-          fn = p[0] || '';
-          ln = p.slice(1).join(' ') || '';
-        }
-        document.getElementById('first-name').value = fn;
-        document.getElementById('middle-name').value = mn;
-        document.getElementById('last-name').value = ln;
-        document.getElementById('email').value = acc.email || user.email;
-        var nat = acc.nationality || 'IN';
-        var sel = document.getElementById('nationality');
-        if (sel.querySelector('option[value="' + nat + '"]')) sel.value = nat;
-        else sel.value = 'IN';
+      function showMessage(text, isError) {
+        message.textContent = text;
+        message.className =
+          'rounded-md px-4 py-3 text-sm ' +
+          (isError ? 'border border-red-200 bg-red-50 text-red-800' : 'border border-green-200 bg-green-50 text-green-800');
       }
-      fill();
 
-      document.getElementById('profile-form').addEventListener('submit', function (e) {
-        e.preventDefault();
-        var p = document.getElementById('password').value;
-        var c = document.getElementById('password-confirmation').value;
-        if (p || c) {
-          if (p !== c) {
-            alert('Passwords do not match.');
-            return;
-          }
+      function fillProfile(currentUser) {
+        var metadata = currentUser.user_metadata || {};
+        document.getElementById('first-name').value = metadata.first_name || '';
+        document.getElementById('middle-name').value = metadata.middle_name || '';
+        document.getElementById('last-name').value = metadata.last_name || '';
+        document.getElementById('email').value = currentUser.email || '';
+        var nationality = metadata.nationality || 'IN';
+        var select = document.getElementById('nationality');
+        select.value = select.querySelector('option[value="' + nationality + '"]') ? nationality : 'IN';
+        document.body.classList.remove('profile-auth-pending');
+      }
+
+      (window.EvisaSupabaseReady || Promise.resolve(null)).then(function (supabase) {
+        if (!supabase) return null;
+        return supabase.auth.getUser().then(function (result) {
+          if (result.error) throw result.error;
+          return result.data.user;
+        });
+      }).then(function (currentUser) {
+        if (!currentUser) {
+          window.location.replace('login.html');
+          return;
         }
+        user = currentUser;
+        fillProfile(user);
+      }).catch(function () {
+        window.location.replace('login.html');
+      });
+
+      document.getElementById('profile-form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        if (!user || !window.EvisaSupabase) return;
+        var password = document.getElementById('password').value;
+        var confirmation = document.getElementById('password-confirmation').value;
+        if ((password || confirmation) && password !== confirmation) {
+          showMessage('Passwords do not match.', true);
+          return;
+        }
+
         var firstName = document.getElementById('first-name').value.trim();
         var lastName = document.getElementById('last-name').value.trim();
-        var displayName = (firstName + ' ' + lastName).trim() || acc.displayName;
-        acc.firstName = firstName;
-        acc.middleName = document.getElementById('middle-name').value.trim();
-        acc.lastName = lastName;
-        acc.nationality = document.getElementById('nationality').value;
-        acc.email = document.getElementById('email').value.trim();
-        if (p) acc.password = p;
-        acc.displayName = displayName;
-        sessionStorage.setItem('evisaAccount', JSON.stringify(acc));
-        sessionStorage.setItem('evisaUser', JSON.stringify({ email: acc.email, displayName: displayName }));
-        document.getElementById('password').value = '';
-        document.getElementById('password-confirmation').value = '';
-        alert('Your profile has been updated.');
-        window.location.reload();
+        var email = document.getElementById('email').value.trim();
+        var attributes = {
+          data: {
+            first_name: firstName,
+            middle_name: document.getElementById('middle-name').value.trim(),
+            last_name: lastName,
+            nationality: document.getElementById('nationality').value,
+            display_name: (firstName + ' ' + lastName).trim() || email.split('@')[0]
+          }
+        };
+        if (email && email !== user.email) attributes.email = email;
+        if (password) attributes.password = password;
+
+        submit.disabled = true;
+        submit.textContent = 'Saving…';
+        window.EvisaSupabase.auth.updateUser(attributes).then(function (result) {
+          if (result.error) throw result.error;
+          user = result.data.user;
+          document.getElementById('password').value = '';
+          document.getElementById('password-confirmation').value = '';
+          showMessage(
+            attributes.email
+              ? 'Profile saved. Confirm the new email address using the message sent to you.'
+              : 'Your profile has been updated.',
+            false
+          );
+          if (window.renderNavbarAuth) window.renderNavbarAuth();
+        }).catch(function (error) {
+          showMessage(error.message || 'Could not update the profile.', true);
+        }).finally(function () {
+          submit.disabled = false;
+          submit.textContent = 'Save';
+        });
       });
     })();
   </script>

@@ -3,81 +3,89 @@
 
   var w = typeof window !== 'undefined' ? window : {};
 
-  function L(key, en) {
-    if (!w.EvisaI18n || w.EvisaI18n.getLang() !== 'sq') return en;
-    var tr = w.EvisaI18n.t(key);
-    return tr != null && tr !== '' ? tr : en;
+  function L(key, english) {
+    if (!w.EvisaI18n || w.EvisaI18n.getLang() !== 'sq') return english;
+    var translated = w.EvisaI18n.t(key);
+    return translated != null && translated !== '' ? translated : english;
   }
 
-  function esc(s) {
-    if (!s) return '';
-    var d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+  function esc(value) {
+    if (!value) return '';
+    var div = document.createElement('div');
+    div.textContent = value;
+    return div.innerHTML;
   }
 
-  function getUser() {
-    try {
-      var u = JSON.parse(sessionStorage.getItem('evisaUser') || 'null');
-      return u && u.email ? u : null;
-    } catch (e) {
-      return null;
-    }
+  function displayName(user) {
+    var metadata = (user && user.user_metadata) || {};
+    var fullName = metadata.display_name ||
+      [metadata.first_name, metadata.last_name].filter(Boolean).join(' ');
+    return fullName || (user && user.email ? user.email.split('@')[0] : 'User');
   }
 
-  function closeAllDd() {
-    var n = document.getElementById('nav-notify-dropdown');
-    var u = document.getElementById('nav-user-dropdown');
-    if (n) n.classList.add('hidden');
-    if (u) u.classList.add('hidden');
+  function closeAllDropdowns() {
+    var notifications = document.getElementById('nav-notify-dropdown');
+    var user = document.getElementById('nav-user-dropdown');
+    if (notifications) notifications.classList.add('hidden');
+    if (user) user.classList.add('hidden');
   }
 
-  function bindDropdowns(displayName, email) {
+  function clearLegacyAuthData() {
+    sessionStorage.removeItem('evisaUser');
+    sessionStorage.removeItem('evisaAccount');
+    sessionStorage.removeItem('evisaPendingLogin');
+    sessionStorage.removeItem('evisaAdminLogged');
+  }
+
+  function bindDropdowns(user) {
     var bell = document.getElementById('nav-bell-btn');
-    var userBtn = document.getElementById('nav-user-menu-btn');
-    var nd = document.getElementById('nav-notify-dropdown');
-    var ud = document.getElementById('nav-user-dropdown');
+    var userButton = document.getElementById('nav-user-menu-btn');
+    var notifications = document.getElementById('nav-notify-dropdown');
+    var userDropdown = document.getElementById('nav-user-dropdown');
     var header = document.getElementById('nav-user-header');
     var signOut = document.getElementById('nav-sign-out');
 
     if (header) {
       header.innerHTML =
-        esc(displayName) +
+        esc(displayName(user)) +
         '<br><span class="text-gray-500 text-xs">' +
-        esc(email) +
+        esc(user.email || '') +
         '</span>';
     }
 
-    function toggle(el) {
-      if (!el) return;
-      var open = el.classList.contains('hidden');
-      closeAllDd();
-      if (open) el.classList.remove('hidden');
+    function toggle(element) {
+      if (!element) return;
+      var shouldOpen = element.classList.contains('hidden');
+      closeAllDropdowns();
+      if (shouldOpen) element.classList.remove('hidden');
     }
 
-    if (bell && nd) {
-      bell.addEventListener('click', function (e) {
-        e.stopPropagation();
-        toggle(nd);
+    if (bell && notifications) {
+      bell.addEventListener('click', function (event) {
+        event.stopPropagation();
+        toggle(notifications);
       });
     }
-    if (userBtn && ud) {
-      userBtn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        toggle(ud);
+    if (userButton && userDropdown) {
+      userButton.addEventListener('click', function (event) {
+        event.stopPropagation();
+        toggle(userDropdown);
       });
     }
-    document.addEventListener('click', function () {
-      closeAllDd();
-    });
-    if (nd) nd.addEventListener('click', function (e) { e.stopPropagation(); });
-    if (ud) ud.addEventListener('click', function (e) { e.stopPropagation(); });
+    document.addEventListener('click', closeAllDropdowns);
+    if (notifications) notifications.addEventListener('click', function (event) { event.stopPropagation(); });
+    if (userDropdown) userDropdown.addEventListener('click', function (event) { event.stopPropagation(); });
 
     if (signOut) {
-      signOut.addEventListener('click', function (e) {
-        e.preventDefault();
-        sessionStorage.removeItem('evisaUser');
-        window.location.href = 'index.html';
+      signOut.addEventListener('click', function (event) {
+        event.preventDefault();
+        var signOutRequest = w.EvisaSupabase
+          ? w.EvisaSupabase.auth.signOut()
+          : Promise.resolve();
+        signOutRequest.catch(function () {}).finally(function () {
+          clearLegacyAuthData();
+          window.location.href = 'index.html';
+        });
       });
     }
   }
@@ -109,7 +117,7 @@
       '<a href="profile.html" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" role="menuitem">' +
       esc(L('nav_profile', 'My profile')) +
       '</a>' +
-      '<a href="https://e-visa.al/applications" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" role="menuitem" target="_blank" rel="noopener">' +
+      '<a href="apply.html" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" role="menuitem">' +
       esc(L('nav_apps', 'Applications')) +
       '</a>' +
       '<a href="#" id="nav-sign-out" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" role="menuitem">' +
@@ -134,21 +142,35 @@
 
   function renderNavbarAuth() {
     var mount = document.getElementById('navbar-auth-mount');
-    if (!mount) return;
-    var user = getUser();
-    if (user) {
-      mount.innerHTML = loggedInHtml();
-      bindDropdowns(user.displayName || 'User', user.email);
-    } else {
+    if (!mount) return Promise.resolve();
+    mount.setAttribute('aria-busy', 'true');
+
+    return (w.EvisaSupabaseReady || Promise.resolve(null)).then(function (supabase) {
+      if (!supabase) return null;
+      w.EvisaSupabase = supabase;
+      return supabase.auth.getUser().then(function (result) {
+        if (result.error) return null;
+        return result.data.user || null;
+      });
+    }).then(function (user) {
+      mount.innerHTML = user ? loggedInHtml() : guestHtml();
+      mount.removeAttribute('aria-busy');
+      if (user) bindDropdowns(user);
+    }).catch(function () {
       mount.innerHTML = guestHtml();
-    }
+      mount.removeAttribute('aria-busy');
+    });
   }
 
   w.renderNavbarAuth = renderNavbarAuth;
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', renderNavbarAuth);
-  } else {
+  function start() {
     renderNavbarAuth();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
   }
 })();

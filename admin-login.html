@@ -51,25 +51,38 @@
 
   <script src="evisa-supabase-config.js"></script>
   <script src="evisa-supabase-client.js"></script>
+  <script src="evisa-cloud.js"></script>
   <script src="admin-config.js"></script>
   <script>
     (function () {
       var form = document.getElementById('admin-login-form');
       var err = document.getElementById('admin-login-err');
-      var supabaseConfig = window.EvisaSupabaseConfig;
-      var hasSupabaseConfig = !!(supabaseConfig && supabaseConfig.url && supabaseConfig.anonKey);
-
-      if (sessionStorage.getItem('evisaAdminLogged') === '1') {
-        window.location.replace('admin.html');
-        return;
-      }
-
       var adminCfg = window.EVISA_ADMIN_CONFIG || {};
-      if (hasSupabaseConfig) {
-        document.getElementById('adm-user').placeholder = adminCfg.adminEmail || 'Enter admin email';
-      } else {
-        document.getElementById('adm-user-label').textContent = 'Username';
+      var btn = document.getElementById('admin-login-btn');
+      document.getElementById('adm-user').placeholder = adminCfg.adminEmail || 'Enter admin email';
+
+      function setBusy(busy) {
+        btn.disabled = busy;
+        btn.textContent = busy ? 'Signing in…' : 'Open admin panel';
       }
+
+      function showError(message) {
+        err.textContent = message || 'Admin login failed.';
+        err.classList.remove('hidden');
+        setBusy(false);
+      }
+
+      (window.EvisaCloudReady || Promise.resolve(false)).then(function (ready) {
+        if (!ready || !window.EvisaSupabase || !window.isEvisaAdminAsync) return false;
+        return window.EvisaSupabase.auth.getUser().then(function (result) {
+          if (result.error || !result.data.user) return false;
+          return window.isEvisaAdminAsync();
+        });
+      }).then(function (isAdmin) {
+        if (isAdmin) window.location.replace('admin.html');
+      }).catch(function () {
+        // Keep the login form available when an old/invalid session exists.
+      });
 
       form.addEventListener('submit', function (e) {
         e.preventDefault();
@@ -77,46 +90,27 @@
         var u = document.getElementById('adm-user').value.trim();
         var p = document.getElementById('adm-pass').value;
         if (!u || !p) {
-          err.textContent = 'Enter email and password.';
-          err.classList.remove('hidden');
+          showError('Enter email and password.');
           return;
         }
 
-        if (hasSupabaseConfig) {
-          var btn = form.querySelector('button[type="submit"]');
-          if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
-          (window.EvisaSupabaseReady || Promise.reject(new Error('Supabase not configured'))).then(function (supabase) {
-            return supabase.auth.signInWithPassword({ email: u, password: p });
-          }).then(function (res) {
-            if (res.error) {
-              err.textContent = res.error.message || 'Invalid email or password.';
-              err.classList.remove('hidden');
-              if (btn) { btn.disabled = false; btn.textContent = 'Open admin panel'; }
-              return;
-            }
-            sessionStorage.setItem('evisaAdminLogged', '1');
-            window.location.href = 'admin.html';
-          }).catch(function (e) {
-            err.textContent = e.message || 'Login failed. Check console or try from Netlify URL.';
-            err.classList.remove('hidden');
-            if (btn) { btn.disabled = false; btn.textContent = 'Open admin panel'; }
-          });
-          return;
-        }
-
-        var cfg = window.EVISA_ADMIN_CONFIG;
-        if (!cfg || typeof cfg.username !== 'string' || typeof cfg.password !== 'string') {
-          err.textContent = 'Add url and anonKey in evisa-supabase-config.js for Supabase login.';
-          err.classList.remove('hidden');
-          return;
-        }
-        if (u === cfg.username && p === cfg.password) {
-          sessionStorage.setItem('evisaAdminLogged', '1');
-          window.location.href = 'admin.html';
-        } else {
-          err.textContent = 'Invalid username or password.';
-          err.classList.remove('hidden');
-        }
+        setBusy(true);
+        (window.EvisaCloudReady || Promise.resolve(false)).then(function (ready) {
+          if (!ready || !window.EvisaSupabase) throw new Error('Secure login service is unavailable.');
+          return window.EvisaSupabase.auth.signInWithPassword({ email: u, password: p });
+        }).then(function (result) {
+          if (result.error) throw result.error;
+          return window.isEvisaAdminAsync();
+        }).then(function (isAdmin) {
+          if (!isAdmin) {
+            return window.EvisaSupabase.auth.signOut().then(function () {
+              throw new Error('This account is not authorized for the admin panel.');
+            });
+          }
+          window.location.replace('admin.html');
+        }).catch(function (error) {
+          showError(error.message || 'Invalid email or password.');
+        });
       });
     })();
   </script>
