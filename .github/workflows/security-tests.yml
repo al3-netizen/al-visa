@@ -20,3 +20,5 @@ jobs:
         run: find . -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Run security regression tests
         run: node --test tests/*.test.js
+      - name: Verify live Supabase RPC security
+        run: node tests/live-supabase-smoke.js
