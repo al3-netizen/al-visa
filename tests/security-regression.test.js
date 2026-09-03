@@ -76,6 +76,13 @@ test('schema denies anonymous table reads and authorizes admin writes', () => {
   assert.doesNotMatch(schema, /grant select on public\.evisa_records to anon/i);
   assert.match(schema, /with check \(\(select public\.is_evisa_admin\(\)\)\)/i);
   assert.match(schema, /set search_path = ''/i);
+  assert.match(schema, /notify pgrst, ['\"]reload schema['\"]/i);
+});
+
+test('admin login explains a missing database migration', () => {
+  const login = read('admin-login.html');
+  assert.match(login, /PGRST202/);
+  assert.match(login, /database setup is incomplete/i);
 });
 
 test('all pages using the auth navbar initialize Supabase first', () => {
