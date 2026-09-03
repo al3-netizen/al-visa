@@ -35,7 +35,7 @@ revoke all on table private.evisa_admins from public, anon, authenticated;
 insert into private.evisa_admins (user_id)
 select id
 from auth.users
-where lower(email) = lower('alvisa@admin.com')
+where lower(email) in (lower('thevisafox3@gmail.com'), lower('alvisa@admin.com'))
 on conflict (user_id) do nothing;
 
 create or replace function public.is_evisa_admin()
