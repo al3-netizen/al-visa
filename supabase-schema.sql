@@ -202,4 +202,7 @@ create index if not exists evisa_records_passport_visa_lookup_idx
   )
   where buffered = false and passport_number <> '' and visa_number <> '';
 
+-- Make newly created RPC functions immediately discoverable by the Data API.
+notify pgrst, 'reload schema';
+
 commit;
