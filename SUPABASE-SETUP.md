@@ -2,8 +2,8 @@
 
 Apply the database changes before deploying the updated frontend.
 
-1. In Supabase Authentication, ensure the administrator user
-   `alvisa@admin.com` already exists.
+1. In Supabase Authentication, ensure the primary administrator user
+   `thevisafox3@gmail.com` exists. Keep `alvisa@admin.com` only as the backup administrator.
 2. Run `supabase-schema.sql` with a database-owner connection or in the
    Supabase SQL Editor.
 3. In Authentication → URL Configuration, add the deployed URLs for:
